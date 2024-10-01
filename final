@@ -1,0 +1,129 @@
+#!/bin/bash
+
+# Step 1: Get the ClickHouse container ID
+CONTAINER_ID=$(docker ps | grep clickhouse | awk '{print $1}')
+if [ -z "$CONTAINER_ID" ]; then
+  echo "ClickHouse container not found."
+  exit 1
+fi
+
+# Step 2: Define the query to run inside ClickHouse
+QUERY="SELECT
+    f.SrcAddr AS source_address,
+    f.DstAddr AS destination_address,
+    f.SrcAS AS source_asn,
+    a.name AS source_asn_name,
+    COUNT(*) AS total_flows,
+    SUM(f.Bytes) / 1048576 AS total_mb
+FROM flows AS f
+LEFT JOIN asns AS a ON f.SrcAS = a.asn
+GROUP BY
+    source_address,
+    destination_address,
+    source_asn,
+    source_asn_name
+ORDER BY total_mb DESC
+LIMIT 100;"
+
+# Step 3: Run the query inside the ClickHouse container and store the output in a temporary file
+docker exec -i $CONTAINER_ID clickhouse-client --query="$QUERY" > query_output.csv
+
+echo "Query executed and results saved to query_output.csv."
+
+
+# Input and output file paths for IPv4 conversion
+input_file="query_output.csv"
+output_file="ipv4_converted_output.csv"
+
+# Function to convert IPv6-mapped IPv4 addresses to pure IPv4
+convert_ipv6_to_ipv4() {
+    local ip=$1
+    # Check if the IP is an IPv4-mapped IPv6 address (starts with ::ffff:)
+    if [[ "$ip" =~ ^::ffff: ]]; then
+        # Extract the IPv4 portion from the IPv6 address (strip ::ffff:)
+        echo "${ip##*::ffff:}"
+    else
+        # If not an IPv6-mapped address, return the original
+        echo "$ip"
+    fi
+}
+
+# Add header to the output file (if present)
+head -n 1 "$input_file" > "$output_file"
+
+# Loop through the CSV, converting IPv6-mapped IPv4 addresses to IPv4
+tail -n +2 "$input_file" | while IFS=$'\t' read -r source_address destination_address source_asn source_asn_name total_flows total_mb; do
+    # Convert IPv6-mapped IPv4 addresses to pure IPv4
+    source_address_converted=$(convert_ipv6_to_ipv4 "$source_address")
+    destination_address_converted=$(convert_ipv6_to_ipv4 "$destination_address")
+
+    # Append the converted result to the output file
+    echo -e "$source_address_converted\t$destination_address_converted\t$source_asn\t$source_asn_name\t$total_flows\t$total_mb" >> "$output_file"
+done
+
+echo "IPv6 to IPv4 conversion completed and saved to $output_file."
+
+
+# Input and output file paths for DNS lookup
+input_file="ipv4_converted_output.csv"
+output_file="dns_lookup_output.csv"
+
+# Function to perform DNS lookup and return the resolved name
+perform_dns_lookup() {
+    local ip=$1
+    # Run nslookup and extract the canonical name (CNAME) if available
+    dns_name=$(nslookup "$ip" | awk -F 'name = ' '/name =/ {print $2}' | sed 's/\.$//')
+    # If nslookup fails or no name is found, return "No DNS name"
+    if [ -z "$dns_name" ]; then
+        dns_name="No DNS name"
+    fi
+    echo "$dns_name"
+}
+
+# Add header to the output file
+echo -e "source_address\tdns_name_src\tdestination_address\tdns_name_dst\tsource_asn\tsource_asn_name\ttotal_flows\ttotal_mb" > "$output_file"
+
+# Loop through the CSV, performing DNS lookups
+tail -n +2 "$input_file" | while IFS=$'\t' read -r source_address destination_address source_asn source_asn_name total_flows total_mb; do
+    # Perform DNS lookup for source address
+    if [ -n "$source_address" ]; then
+        dns_name_src=$(perform_dns_lookup "$source_address")
+    else
+        dns_name_src="No DNS name"
+    fi
+
+    # Perform DNS lookup for destination address
+    if [ -n "$destination_address" ]; then
+        dns_name_dst=$(perform_dns_lookup "$destination_address")
+    else
+        dns_name_dst="No DNS name"
+    fi
+
+    # Append the result with DNS names to the output file
+    echo -e "$source_address\t$dns_name_src\t$destination_address\t$dns_name_dst\t$source_asn\t$source_asn_name\t$total_flows\t$total_mb" >> "$output_file"
+done
+
+echo "DNS lookup completed and saved to $output_file."
+
+
+# Step 4: Push the final output to ClickHouse
+
+# Create table if it does not exist
+create_table_query="CREATE TABLE IF NOT EXISTS dns_lookup_results (
+    source_address String,
+    dns_name_src String,
+    destination_address String,
+    dns_name_dst String,
+    source_asn UInt32,
+    source_asn_name String,
+    total_flows UInt32,
+    total_mb Float64
+) ENGINE = MergeTree() ORDER BY source_address;"
+
+# Create the table in ClickHouse
+docker exec -i $CONTAINER_ID clickhouse-client --query="$create_table_query"
+
+# Push the CSV data to ClickHouse
+docker exec -i $CONTAINER_ID clickhouse-client --query="INSERT INTO dns_lookup_results FORMAT TabSeparated" < dns_lookup_output.csv
+
+echo "Final output pushed to ClickHouse."
