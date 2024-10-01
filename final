@@ -67,7 +67,7 @@ echo "IPv6 to IPv4 conversion completed and saved to $output_file."
 input_file="ipv4_converted_output.csv"
 output_file="dns_lookup_output.csv"
 
-# Function to perform DNS lookup and return the truncated result
+# Function to perform DNS lookup and sanitize the result
 perform_dns_lookup() {
     local ip=$1
     # Run nslookup and extract the canonical name (CNAME) if available
@@ -76,11 +76,8 @@ perform_dns_lookup() {
     if [ -z "$dns_name" ]; then
         dns_name="No DNS name"
     fi
-    # Extract only the part up to the main domain (e.g., .com, .net, .org)
-    dns_name=$(echo "$dns_name" | grep -oP '.*?\.(com|net|org|edu|gov|info)')
-    if [ -z "$dns_name" ]; then
-        dns_name="No DNS name"
-    fi
+    # Remove any newlines or backslashes from DNS name
+    dns_name=$(echo "$dns_name" | tr -d '\n' | tr -d '\\')
     echo "$dns_name"
 }
 
