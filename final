@@ -30,7 +30,6 @@ docker exec -i $CONTAINER_ID clickhouse-client --query="$QUERY" > query_output.c
 
 echo "Query executed and results saved to query_output.csv."
 
-
 # Input and output file paths for IPv4 conversion
 input_file="query_output.csv"
 output_file="ipv4_converted_output.csv"
@@ -106,7 +105,11 @@ done
 echo "DNS lookup completed and saved to $output_file."
 
 
-# Step 4: Push the final output to ClickHouse
+# Step 4: Clean up the CSV file for any formatting issues
+echo "Cleaning up CSV file..."
+sed -i 's/\r//g' dns_lookup_output.csv  # Remove any rogue carriage returns
+
+# Step 5: Push the final output to ClickHouse
 
 # Create table if it does not exist
 create_table_query="CREATE TABLE IF NOT EXISTS dns_lookup_results (
