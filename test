@@ -1,1 +1,34 @@
-test file for code review
+interface-classifiers:
+  # Transit / External Uplinks
+  - ClassifyConnectivityRegex(Interface.Description, "^(?i)(transit|uplink|ix|pni):? ", "$1") &&
+    ClassifyProviderRegex(Interface.Description, "bdr(\d+)", "border-router$1") &&
+    ClassifyExternal()
+
+  # AGG / Switch transit
+  - ClassifyConnectivityRegex(Interface.Description, "^(?i)Switch\S+LAS-.*?AGG\d+\.\S+\.et\d/\d+/\d+/\d+/\d+", "transit") &&
+    ClassifyProviderRegex(Interface.Description, "AGG(\d+)", "agg$1") &&
+    ClassifyExternal()
+
+  # Internal / Mgmt / Loopback
+  - ClassifyConnectivityRegex(Interface.Description, "^(?i)(internal|loopback|mgmt):? ", "$1") &&
+    ClassifyProvider("internal-network") &&
+    ClassifyInternal()
+
+  # Bundle-Ether catch-all
+  - ClassifyConnectivityRegex(Interface.Name, "^Bundle-Ether\d+$", "bundle") &&
+    ClassifyProvider("internal-network") &&
+    ClassifyInternal()
+
+  # Generic TenGigE catch-all
+  - ClassifyConnectivityRegex(Interface.Name, "^TenGigE\d+/\d+/\d+/\d+(/\d+)?$", "ten-gig") &&
+    ClassifyProvider("internal-network") &&
+    ClassifyInternal()
+
+  # Ethernet catch-all
+  - ClassifyConnectivityRegex(Interface.Name, "^Ethernet\d+$", "ethernet") &&
+    ClassifyProvider("internal-network") &&
+    ClassifyInternal()
+
+  # Final catch-all — for any unknown interface
+  - ClassifyProvider("unknown") &&
+    ClassifyInternal()
